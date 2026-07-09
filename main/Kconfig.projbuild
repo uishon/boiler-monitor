@@ -1,0 +1,15 @@
+menu "Example Configuration"
+
+config WIFI_SSID
+    string "WiFi SSID"
+    default "my-wifi"
+    help
+        SSID for the Wi-Fi network to connect to.
+
+config WIFI_PASSWORD
+    string "WiFi Password"
+    default "my-password"
+    help
+        Password for the Wi-Fi network.
+
+endmenu
