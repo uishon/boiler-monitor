@@ -10,8 +10,11 @@
 #include "esp_netif.h"
 #include "esp_http_server.h"
 #include "sensors.h"
+#include "oled.h"
 
 static const char *TAG = "boiler";
+static bool s_wifi_connected;
+static char s_ip_address[16] = "WAITING";
 
 static void wifi_event_handler(void *arg, esp_event_base_t event_base,
                                int32_t event_id, void *event_data)
@@ -19,9 +22,14 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
         esp_wifi_connect();
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        s_wifi_connected = false;
+        snprintf(s_ip_address, sizeof(s_ip_address), "WAITING");
         esp_wifi_connect();
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
+        s_wifi_connected = true;
+        snprintf(s_ip_address, sizeof(s_ip_address), IPSTR,
+                 IP2STR(&event->ip_info.ip));
         ESP_LOGI(TAG, "Got IP: " IPSTR, IP2STR(&event->ip_info.ip));
     }
 }
@@ -86,8 +94,14 @@ void app_main(void)
     wifi_init();
     http_server_init();
     sensors_init();
+    ESP_ERROR_CHECK(oled_init());
     xTaskCreate(sensors_task, "sensors_task", 4096, NULL, 5, NULL);
 
     while (true) {
+        esp_err_t err = oled_update(g_temp_c, s_wifi_connected, s_ip_address);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "OLED update failed: %s", esp_err_to_name(err));
+        }
         vTaskDelay(pdMS_TO_TICKS(1000));
-    }}
+    }
+}

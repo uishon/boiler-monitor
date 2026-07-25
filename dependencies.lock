@@ -29,10 +29,10 @@ dependencies:
   idf:
     source:
       type: idf
-    version: 5.2.0
+    version: 6.0.2
 direct_dependencies:
 - espressif/ds18b20
 - idf
-manifest_hash: e550f03e15755d19f08af403407e5a47bd6297b92bb95f90836cac17b50237a4
+manifest_hash: 256db473fe9c110396ce171600f979a20445313761b23c5dc213d7015da364f4
 target: esp32
-version: 2.0.0
+version: 3.0.0
