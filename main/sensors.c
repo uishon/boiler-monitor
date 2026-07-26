@@ -8,6 +8,7 @@
 #include "ds18b20.h"
 
 #define ONEWIRE_PIN GPIO_NUM_4
+#define SENSOR_UPDATE_PERIOD_MS 5000U
 static const char *TAG = "sensors";
 
 // Global temperature arrays
@@ -18,6 +19,31 @@ float g_temp_f[2];
 static onewire_bus_handle_t g_bus = NULL;
 static ds18b20_device_handle_t g_devices[8];
 static size_t g_device_count = 0;
+static volatile TickType_t g_last_update_tick;
+
+uint32_t sensors_seconds_since_update(void)
+{
+    TickType_t now = xTaskGetTickCount();
+    TickType_t elapsed_ticks = now - g_last_update_tick;
+    return (uint32_t)(elapsed_ticks / pdMS_TO_TICKS(1000));
+}
+
+uint8_t sensors_update_progress_percent(void)
+{
+    TickType_t now = xTaskGetTickCount();
+    TickType_t elapsed_ticks = now - g_last_update_tick;
+    TickType_t period_ticks = pdMS_TO_TICKS(SENSOR_UPDATE_PERIOD_MS);
+
+    if (period_ticks == 0) {
+        return 0;
+    }
+
+    if (elapsed_ticks >= period_ticks) {
+        return 100;
+    }
+
+    return (uint8_t)((elapsed_ticks * 100U) / period_ticks);
+}
 
 void sensors_init(void)
 {
@@ -59,6 +85,7 @@ void sensors_init(void)
     ESP_LOGI(TAG, "Total DS18B20 sensors: %u", g_device_count);
 
     ESP_ERROR_CHECK(onewire_del_device_iter(iter));
+    g_last_update_tick = xTaskGetTickCount();
 }
 
 void sensors_task(void *arg)
@@ -93,6 +120,8 @@ void sensors_task(void *arg)
             }
         }
 
-        vTaskDelay(pdMS_TO_TICKS(5000));
+        g_last_update_tick = xTaskGetTickCount();
+
+        vTaskDelay(pdMS_TO_TICKS(SENSOR_UPDATE_PERIOD_MS));
     }
 }

@@ -20,6 +20,10 @@
 static const char *TAG = "oled";
 static esp_lcd_panel_handle_t s_panel;
 static uint8_t s_framebuffer[OLED_WIDTH * OLED_HEIGHT / 8];
+static float s_last_temperatures_c[2];
+static bool s_last_wifi_connected;
+static char s_last_ip_address[16];
+static bool s_last_state_valid;
 
 typedef struct {
     char character;
@@ -111,6 +115,84 @@ static void draw_text(uint8_t x, uint8_t y, const char *text)
     }
 }
 
+static void draw_hline(uint8_t x, uint8_t y, uint8_t width)
+{
+    for (uint8_t i = 0; i < width; i++) {
+        set_pixel(x + i, y);
+    }
+}
+
+static void draw_vline(uint8_t x, uint8_t y, uint8_t height)
+{
+    for (uint8_t i = 0; i < height; i++) {
+        set_pixel(x, y + i);
+    }
+}
+
+static void draw_progress_bar(uint8_t x, uint8_t y, uint8_t width,
+                              uint8_t height, uint8_t progress_percent)
+{
+    if (width < 2 || height < 2) {
+        return;
+    }
+
+    if (progress_percent > 100U) {
+        progress_percent = 100U;
+    }
+
+    draw_hline(x, y, width);
+    draw_hline(x, y + height - 1, width);
+    draw_vline(x, y, height);
+    draw_vline(x + width - 1, y, height);
+
+    uint8_t inner_width = width - 2;
+    uint8_t fill_width = (uint8_t)((inner_width * progress_percent) / 100U);
+    for (uint8_t row = 1; row < height - 1; row++) {
+        for (uint8_t col = 0; col < fill_width; col++) {
+            set_pixel(x + 1 + col, y + row);
+        }
+    }
+}
+
+static esp_err_t flush_region(uint8_t y_start, uint8_t y_end)
+{
+    if (y_start >= y_end || y_end > OLED_HEIGHT || (y_start % 8) != 0 ||
+        (y_end % 8) != 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    size_t byte_offset = (y_start / 8) * OLED_WIDTH;
+    return esp_lcd_panel_draw_bitmap(s_panel, 0, y_start, OLED_WIDTH, y_end,
+                                     &s_framebuffer[byte_offset]);
+}
+
+static void draw_static_status(const float temperatures_c[2], bool wifi_connected,
+                               const char *ip_address)
+{
+    char line[22];
+
+    snprintf(line, sizeof(line), "S1: %.2fC", temperatures_c[0]);
+    draw_text(0, 0, line);
+
+    snprintf(line, sizeof(line), "S2: %.2fC", temperatures_c[1]);
+    draw_text(0, 9, line);
+
+    snprintf(line, sizeof(line), "IP: %s", ip_address);
+    draw_text(0, 18, line);
+
+    draw_text(0, 27, wifi_connected ? "WIFI: CONNECTED" : "WIFI: CONNECTING");
+}
+
+static void draw_dynamic_status(uint32_t seconds_since_update,
+                                uint8_t update_progress_percent)
+{
+    char line[22];
+
+    snprintf(line, sizeof(line), "AGE: %lus", (unsigned long)seconds_since_update);
+    draw_text(0, 40, line);
+    draw_progress_bar(0, 56, OLED_WIDTH, 8, update_progress_percent);
+}
+
 esp_err_t oled_init(void)
 {
     esp_err_t err;
@@ -177,26 +259,38 @@ esp_err_t oled_init(void)
 }
 
 esp_err_t oled_update(const float temperatures_c[2], bool wifi_connected,
-                      const char *ip_address)
+                      const char *ip_address,
+                      uint32_t seconds_since_update,
+                      uint8_t update_progress_percent)
 {
     if (s_panel == NULL || temperatures_c == NULL || ip_address == NULL) {
         return ESP_ERR_INVALID_STATE;
     }
 
-    char line[22];
-    memset(s_framebuffer, 0, sizeof(s_framebuffer));
+    bool static_changed = !s_last_state_valid ||
+                          temperatures_c[0] != s_last_temperatures_c[0] ||
+                          temperatures_c[1] != s_last_temperatures_c[1] ||
+                          wifi_connected != s_last_wifi_connected ||
+                          strncmp(ip_address, s_last_ip_address,
+                                  sizeof(s_last_ip_address)) != 0;
 
-    snprintf(line, sizeof(line), "S1: %.2fC", temperatures_c[0]);
-    draw_text(0, 0, line);
+    if (static_changed) {
+        memset(s_framebuffer, 0, sizeof(s_framebuffer));
+        draw_static_status(temperatures_c, wifi_connected, ip_address);
+        draw_dynamic_status(seconds_since_update, update_progress_percent);
 
-    snprintf(line, sizeof(line), "S2: %.2fC", temperatures_c[1]);
-    draw_text(0, 9, line);
+        s_last_temperatures_c[0] = temperatures_c[0];
+        s_last_temperatures_c[1] = temperatures_c[1];
+        s_last_wifi_connected = wifi_connected;
+        snprintf(s_last_ip_address, sizeof(s_last_ip_address), "%s", ip_address);
+        s_last_state_valid = true;
 
-    snprintf(line, sizeof(line), "IP: %s", ip_address);
-    draw_text(0, 18, line);
+        return esp_lcd_panel_draw_bitmap(s_panel, 0, 0, OLED_WIDTH, OLED_HEIGHT,
+                                         s_framebuffer);
+    }
 
-    draw_text(0, 27, wifi_connected ? "WIFI: CONNECTED" : "WIFI: CONNECTING");
-
-    return esp_lcd_panel_draw_bitmap(s_panel, 0, 0, OLED_WIDTH, OLED_HEIGHT,
-                                     s_framebuffer);
+        memset(&s_framebuffer[(40 / 8) * OLED_WIDTH], 0,
+            OLED_WIDTH * ((OLED_HEIGHT - 40) / 8));
+    draw_dynamic_status(seconds_since_update, update_progress_percent);
+        return flush_region(40, OLED_HEIGHT);
 }
