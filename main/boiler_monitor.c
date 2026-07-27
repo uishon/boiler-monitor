@@ -100,8 +100,13 @@ void app_main(void)
     while (true) {
         uint32_t seconds_since_update = sensors_seconds_since_update();
         uint8_t update_progress_percent = sensors_update_progress_percent();
+        uint64_t sensor_addresses[2] = {
+            sensors_address(0),
+            sensors_address(1),
+        };
 
-        esp_err_t err = oled_update(g_temp_c, s_wifi_connected, s_ip_address,
+        esp_err_t err = oled_update(g_temp_c, s_wifi_connected, sensor_addresses,
+                                    s_ip_address,
                                     seconds_since_update, update_progress_percent);
         if (err != ESP_OK) {
             ESP_LOGW(TAG, "OLED update failed: %s", esp_err_to_name(err));

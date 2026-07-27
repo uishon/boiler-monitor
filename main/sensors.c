@@ -18,8 +18,22 @@ float g_temp_f[2];
 // Store bus + devices
 static onewire_bus_handle_t g_bus = NULL;
 static ds18b20_device_handle_t g_devices[8];
+static uint64_t g_device_addresses[8];
 static size_t g_device_count = 0;
 static volatile TickType_t g_last_update_tick;
+
+size_t sensors_count(void)
+{
+    return g_device_count;
+}
+
+uint64_t sensors_address(size_t index)
+{
+    if (index >= g_device_count) {
+        return 0;
+    }
+    return g_device_addresses[index];
+}
 
 uint32_t sensors_seconds_since_update(void)
 {
@@ -77,7 +91,9 @@ void sensors_init(void)
         // Create DS18B20 device handle using the config struct
         ds18b20_device_handle_t ds;
         ESP_ERROR_CHECK(ds18b20_new_device_from_enumeration(&dev, &ds_cfg, &ds));
-        g_devices[g_device_count++] = ds;
+        g_devices[g_device_count] = ds;
+        g_device_addresses[g_device_count] = dev.address;
+        g_device_count++;
 
         if (g_device_count >= 8) break;
     }

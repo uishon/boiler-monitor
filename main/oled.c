@@ -21,6 +21,7 @@ static const char *TAG = "oled";
 static esp_lcd_panel_handle_t s_panel;
 static uint8_t s_framebuffer[OLED_WIDTH * OLED_HEIGHT / 8];
 static float s_last_temperatures_c[2];
+static uint64_t s_last_sensor_addresses[2];
 static bool s_last_wifi_connected;
 static char s_last_ip_address[16];
 static bool s_last_state_valid;
@@ -166,15 +167,32 @@ static esp_err_t flush_region(uint8_t y_start, uint8_t y_end)
                                      &s_framebuffer[byte_offset]);
 }
 
-static void draw_static_status(const float temperatures_c[2], bool wifi_connected,
-                               const char *ip_address)
+static void draw_static_status(const float temperatures_c[2],
+                               const uint64_t sensor_addresses[2],
+                               bool wifi_connected, const char *ip_address)
 {
     char line[22];
+    char sensor0_label[5];
+    char sensor1_label[5];
 
-    snprintf(line, sizeof(line), "S1: %.2fC", temperatures_c[0]);
+    if (sensor_addresses[0] != 0U) {
+        snprintf(sensor0_label, sizeof(sensor0_label), "%04llX",
+                 (unsigned long long)(sensor_addresses[0] & 0xFFFFULL));
+    } else {
+        snprintf(sensor0_label, sizeof(sensor0_label), "----");
+    }
+
+    if (sensor_addresses[1] != 0U) {
+        snprintf(sensor1_label, sizeof(sensor1_label), "%04llX",
+                 (unsigned long long)(sensor_addresses[1] & 0xFFFFULL));
+    } else {
+        snprintf(sensor1_label, sizeof(sensor1_label), "----");
+    }
+
+    snprintf(line, sizeof(line), "%s: %.2fC", sensor0_label, temperatures_c[0]);
     draw_text(0, 0, line);
 
-    snprintf(line, sizeof(line), "S2: %.2fC", temperatures_c[1]);
+    snprintf(line, sizeof(line), "%s: %.2fC", sensor1_label, temperatures_c[1]);
     draw_text(0, 9, line);
 
     snprintf(line, sizeof(line), "IP: %s", ip_address);
@@ -247,6 +265,12 @@ esp_err_t oled_init(void)
         return err;
     }
 
+    err = esp_lcd_panel_mirror(s_panel, true, true);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "set SSD1306 mirror failed: %s", esp_err_to_name(err));
+        return err;
+    }
+
     err = esp_lcd_panel_disp_on_off(s_panel, true);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "turn on SSD1306 panel failed: %s", esp_err_to_name(err));
@@ -259,28 +283,35 @@ esp_err_t oled_init(void)
 }
 
 esp_err_t oled_update(const float temperatures_c[2], bool wifi_connected,
+                      const uint64_t sensor_addresses[2],
                       const char *ip_address,
                       uint32_t seconds_since_update,
                       uint8_t update_progress_percent)
 {
-    if (s_panel == NULL || temperatures_c == NULL || ip_address == NULL) {
+    if (s_panel == NULL || temperatures_c == NULL || sensor_addresses == NULL ||
+        ip_address == NULL) {
         return ESP_ERR_INVALID_STATE;
     }
 
     bool static_changed = !s_last_state_valid ||
                           temperatures_c[0] != s_last_temperatures_c[0] ||
                           temperatures_c[1] != s_last_temperatures_c[1] ||
+                          sensor_addresses[0] != s_last_sensor_addresses[0] ||
+                          sensor_addresses[1] != s_last_sensor_addresses[1] ||
                           wifi_connected != s_last_wifi_connected ||
                           strncmp(ip_address, s_last_ip_address,
                                   sizeof(s_last_ip_address)) != 0;
 
     if (static_changed) {
         memset(s_framebuffer, 0, sizeof(s_framebuffer));
-        draw_static_status(temperatures_c, wifi_connected, ip_address);
+        draw_static_status(temperatures_c, sensor_addresses, wifi_connected,
+                           ip_address);
         draw_dynamic_status(seconds_since_update, update_progress_percent);
 
         s_last_temperatures_c[0] = temperatures_c[0];
         s_last_temperatures_c[1] = temperatures_c[1];
+        s_last_sensor_addresses[0] = sensor_addresses[0];
+        s_last_sensor_addresses[1] = sensor_addresses[1];
         s_last_wifi_connected = wifi_connected;
         snprintf(s_last_ip_address, sizeof(s_last_ip_address), "%s", ip_address);
         s_last_state_valid = true;
@@ -289,8 +320,8 @@ esp_err_t oled_update(const float temperatures_c[2], bool wifi_connected,
                                          s_framebuffer);
     }
 
-        memset(&s_framebuffer[(40 / 8) * OLED_WIDTH], 0,
-            OLED_WIDTH * ((OLED_HEIGHT - 40) / 8));
+    memset(&s_framebuffer[(40 / 8) * OLED_WIDTH], 0,
+           OLED_WIDTH * ((OLED_HEIGHT - 40) / 8));
     draw_dynamic_status(seconds_since_update, update_progress_percent);
-        return flush_region(40, OLED_HEIGHT);
+    return flush_region(40, OLED_HEIGHT);
 }
