@@ -16,6 +16,12 @@ static const char *TAG = "boiler";
 static bool s_wifi_connected;
 static char s_ip_address[16] = "WAITING";
 
+#if CONFIG_FREERTOS_UNICORE
+#define DISPLAY_TASK_CORE 0
+#else
+#define DISPLAY_TASK_CORE 1
+#endif
+
 static void wifi_event_handler(void *arg, esp_event_base_t event_base,
                                int32_t event_id, void *event_data)
 {
@@ -88,14 +94,9 @@ static void http_server_init(void)
     }
 }
 
-void app_main(void)
+static void display_task(void *arg)
 {
-    nvs_flash_init();
-    wifi_init();
-    http_server_init();
-    sensors_init();
-    ESP_ERROR_CHECK(oled_init());
-    xTaskCreate(sensors_task, "sensors_task", 4096, NULL, 5, NULL);
+    uint8_t consecutive_failures = 0;
 
     while (true) {
         uint32_t seconds_since_update = sensors_seconds_since_update();
@@ -109,8 +110,37 @@ void app_main(void)
                                     s_ip_address,
                                     seconds_since_update, update_progress_percent);
         if (err != ESP_OK) {
+            consecutive_failures++;
             ESP_LOGW(TAG, "OLED update failed: %s", esp_err_to_name(err));
+            if (consecutive_failures >= 3) {
+                esp_err_t recover_err = oled_recover();
+                if (recover_err == ESP_OK) {
+                    ESP_LOGW(TAG, "OLED recovered after %u failures", consecutive_failures);
+                    consecutive_failures = 0;
+                } else {
+                    ESP_LOGW(TAG, "OLED recovery failed: %s", esp_err_to_name(recover_err));
+                    vTaskDelay(pdMS_TO_TICKS(3000));
+                }
+            }
+        } else {
+            consecutive_failures = 0;
         }
         vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+}
+
+void app_main(void)
+{
+    nvs_flash_init();
+    wifi_init();
+    http_server_init();
+    sensors_init();
+    ESP_ERROR_CHECK(oled_init());
+    xTaskCreate(sensors_task, "sensors_task", 4096, NULL, 5, NULL);
+    xTaskCreatePinnedToCore(display_task, "display_task", 4096, NULL, 3, NULL,
+                            DISPLAY_TASK_CORE);
+
+    while (true) {
+        vTaskDelay(pdMS_TO_TICKS(10000));
     }
 }

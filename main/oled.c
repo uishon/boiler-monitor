@@ -15,10 +15,19 @@
 #define OLED_I2C_ADDRESS 0x3C
 #define OLED_SDA_GPIO 21
 #define OLED_SCL_GPIO 22
-#define OLED_I2C_CLOCK_HZ (100 * 1000)
+#define OLED_I2C_CLOCK_HZ (50 * 1000)
+#define OLED_I2C_TIMEOUT_MS 50
+#define OLED_SCL_WAIT_US 13000
+#define OLED_DOT_COUNT 5
+#define OLED_DOT_SIZE 3
+#define OLED_DOT_GAP 2
+#define OLED_DOT_ORIGIN_X 0
+#define OLED_DOT_ORIGIN_Y 58
 
 static const char *TAG = "oled";
 static esp_lcd_panel_handle_t s_panel;
+static i2c_master_bus_handle_t s_i2c_bus;
+static i2c_master_dev_handle_t s_i2c_dev;
 static uint8_t s_framebuffer[OLED_WIDTH * OLED_HEIGHT / 8];
 static float s_last_temperatures_c[2];
 static uint64_t s_last_sensor_addresses[2];
@@ -116,43 +125,90 @@ static void draw_text(uint8_t x, uint8_t y, const char *text)
     }
 }
 
-static void draw_hline(uint8_t x, uint8_t y, uint8_t width)
+static void clear_area(uint8_t x, uint8_t y, uint8_t width, uint8_t height)
 {
-    for (uint8_t i = 0; i < width; i++) {
-        set_pixel(x + i, y);
-    }
-}
-
-static void draw_vline(uint8_t x, uint8_t y, uint8_t height)
-{
-    for (uint8_t i = 0; i < height; i++) {
-        set_pixel(x, y + i);
-    }
-}
-
-static void draw_progress_bar(uint8_t x, uint8_t y, uint8_t width,
-                              uint8_t height, uint8_t progress_percent)
-{
-    if (width < 2 || height < 2) {
-        return;
-    }
-
-    if (progress_percent > 100U) {
-        progress_percent = 100U;
-    }
-
-    draw_hline(x, y, width);
-    draw_hline(x, y + height - 1, width);
-    draw_vline(x, y, height);
-    draw_vline(x + width - 1, y, height);
-
-    uint8_t inner_width = width - 2;
-    uint8_t fill_width = (uint8_t)((inner_width * progress_percent) / 100U);
-    for (uint8_t row = 1; row < height - 1; row++) {
-        for (uint8_t col = 0; col < fill_width; col++) {
-            set_pixel(x + 1 + col, y + row);
+    for (uint8_t yy = y; yy < (uint8_t)(y + height) && yy < OLED_HEIGHT; yy++) {
+        for (uint8_t xx = x; xx < (uint8_t)(x + width) && xx < OLED_WIDTH; xx++) {
+            s_framebuffer[(yy / 8) * OLED_WIDTH + xx] &= (uint8_t)~(1U << (yy % 8));
         }
     }
+}
+
+static void draw_filled_rect(uint8_t x, uint8_t y, uint8_t width, uint8_t height)
+{
+    for (uint8_t yy = y; yy < (uint8_t)(y + height) && yy < OLED_HEIGHT; yy++) {
+        for (uint8_t xx = x; xx < (uint8_t)(x + width) && xx < OLED_WIDTH; xx++) {
+            set_pixel(xx, yy);
+        }
+    }
+}
+
+static esp_err_t oled_tx_cmd(uint8_t cmd)
+{
+    uint8_t packet[2] = {0x00, cmd};
+    return i2c_master_transmit(s_i2c_dev, packet, sizeof(packet), OLED_I2C_TIMEOUT_MS);
+}
+
+static esp_err_t oled_tx_page(uint8_t page, const uint8_t *data)
+{
+    esp_err_t err = oled_tx_cmd((uint8_t)(0xB0U | (page & 0x0FU)));
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    err = oled_tx_cmd(0x00U);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    err = oled_tx_cmd(0x10U);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    uint8_t packet[1 + OLED_WIDTH];
+    packet[0] = 0x40U;
+    memcpy(&packet[1], data, OLED_WIDTH);
+    return i2c_master_transmit(s_i2c_dev, packet, sizeof(packet), OLED_I2C_TIMEOUT_MS);
+}
+
+static esp_err_t oled_tx_page_window(uint8_t page, uint8_t x_start, uint8_t x_end,
+                                     const uint8_t *data)
+{
+    if (x_start > x_end || x_end >= OLED_WIDTH) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    esp_err_t err = oled_tx_cmd((uint8_t)(0xB0U | (page & 0x0FU)));
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    err = oled_tx_cmd((uint8_t)(x_start & 0x0FU));
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    err = oled_tx_cmd((uint8_t)(0x10U | ((x_start >> 4) & 0x0FU)));
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    uint8_t width = (uint8_t)(x_end - x_start + 1);
+    uint8_t packet[1 + OLED_WIDTH];
+    packet[0] = 0x40U;
+    memcpy(&packet[1], data + x_start, width);
+    return i2c_master_transmit(s_i2c_dev, packet, (size_t)(1 + width), OLED_I2C_TIMEOUT_MS);
+}
+
+static esp_err_t oled_apply_orientation(void)
+{
+    esp_err_t err = oled_tx_cmd(0xA1U);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    return oled_tx_cmd(0xC8U);
 }
 
 static esp_err_t flush_region(uint8_t y_start, uint8_t y_end)
@@ -162,9 +218,50 @@ static esp_err_t flush_region(uint8_t y_start, uint8_t y_end)
         return ESP_ERR_INVALID_ARG;
     }
 
-    size_t byte_offset = (y_start / 8) * OLED_WIDTH;
-    return esp_lcd_panel_draw_bitmap(s_panel, 0, y_start, OLED_WIDTH, y_end,
-                                     &s_framebuffer[byte_offset]);
+    if (s_i2c_bus == NULL || s_i2c_dev == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    esp_err_t err = i2c_master_probe(s_i2c_bus, OLED_I2C_ADDRESS, OLED_I2C_TIMEOUT_MS);
+    if (err != ESP_OK) {
+        (void)i2c_master_bus_reset(s_i2c_bus);
+        return err;
+    }
+
+    uint8_t start_page = y_start / 8;
+    uint8_t end_page = y_end / 8;
+    for (uint8_t page = start_page; page < end_page; page++) {
+        err = oled_tx_page(page, &s_framebuffer[page * OLED_WIDTH]);
+        if (err != ESP_OK) {
+            (void)i2c_master_bus_reset(s_i2c_bus);
+            return err;
+        }
+    }
+
+    return ESP_OK;
+}
+
+static esp_err_t flush_bottom_dots_window(void)
+{
+    if (s_i2c_bus == NULL || s_i2c_dev == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    esp_err_t err = i2c_master_probe(s_i2c_bus, OLED_I2C_ADDRESS, OLED_I2C_TIMEOUT_MS);
+    if (err != ESP_OK) {
+        (void)i2c_master_bus_reset(s_i2c_bus);
+        return err;
+    }
+
+    uint8_t x_end = (uint8_t)(OLED_DOT_ORIGIN_X + (OLED_DOT_COUNT * OLED_DOT_SIZE) +
+                              ((OLED_DOT_COUNT - 1) * OLED_DOT_GAP) - 1);
+    err = oled_tx_page_window(7, OLED_DOT_ORIGIN_X, x_end,
+                              &s_framebuffer[7 * OLED_WIDTH]);
+    if (err != ESP_OK) {
+        (void)i2c_master_bus_reset(s_i2c_bus);
+    }
+
+    return err;
 }
 
 static void draw_static_status(const float temperatures_c[2],
@@ -204,17 +301,25 @@ static void draw_static_status(const float temperatures_c[2],
 static void draw_dynamic_status(uint32_t seconds_since_update,
                                 uint8_t update_progress_percent)
 {
-    char line[22];
+    (void)update_progress_percent;
 
-    snprintf(line, sizeof(line), "AGE: %lus", (unsigned long)seconds_since_update);
-    draw_text(0, 40, line);
-    draw_progress_bar(0, 56, OLED_WIDTH, 8, update_progress_percent);
+    uint8_t filled_dots = (seconds_since_update >= OLED_DOT_COUNT)
+                              ? OLED_DOT_COUNT
+                              : (uint8_t)seconds_since_update;
+    uint8_t total_width = (uint8_t)((OLED_DOT_COUNT * OLED_DOT_SIZE) +
+                                    ((OLED_DOT_COUNT - 1) * OLED_DOT_GAP));
+
+    clear_area(OLED_DOT_ORIGIN_X, 56, total_width, 8);
+
+    for (uint8_t i = 0; i < filled_dots; i++) {
+        uint8_t x = (uint8_t)(OLED_DOT_ORIGIN_X + i * (OLED_DOT_SIZE + OLED_DOT_GAP));
+        draw_filled_rect(x, OLED_DOT_ORIGIN_Y, OLED_DOT_SIZE, OLED_DOT_SIZE);
+    }
 }
 
 esp_err_t oled_init(void)
 {
     esp_err_t err;
-    i2c_master_bus_handle_t i2c_bus;
     const i2c_master_bus_config_t bus_config = {
         .clk_source = I2C_CLK_SRC_DEFAULT,
         .i2c_port = OLED_I2C_PORT,
@@ -222,9 +327,21 @@ esp_err_t oled_init(void)
         .scl_io_num = OLED_SCL_GPIO,
         .flags.enable_internal_pullup = true,
     };
-    err = i2c_new_master_bus(&bus_config, &i2c_bus);
+    err = i2c_new_master_bus(&bus_config, &s_i2c_bus);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "create I2C bus failed: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    const i2c_device_config_t dev_cfg = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+        .device_address = OLED_I2C_ADDRESS,
+        .scl_speed_hz = OLED_I2C_CLOCK_HZ,
+        .scl_wait_us = OLED_SCL_WAIT_US,
+    };
+    err = i2c_master_bus_add_device(s_i2c_bus, &dev_cfg, &s_i2c_dev);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "add OLED I2C device failed: %s", esp_err_to_name(err));
         return err;
     }
 
@@ -237,7 +354,7 @@ esp_err_t oled_init(void)
         .lcd_param_bits = 8,
         .dc_bit_offset = 6,
     };
-    err = esp_lcd_new_panel_io_i2c(i2c_bus, &io_config, &io_handle);
+    err = esp_lcd_new_panel_io_i2c(s_i2c_bus, &io_config, &io_handle);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "create panel I2C interface failed: %s", esp_err_to_name(err));
         return err;
@@ -271,6 +388,12 @@ esp_err_t oled_init(void)
         return err;
     }
 
+    err = oled_apply_orientation();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "apply SSD1306 orientation failed: %s", esp_err_to_name(err));
+        return err;
+    }
+
     err = esp_lcd_panel_disp_on_off(s_panel, true);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "turn on SSD1306 panel failed: %s", esp_err_to_name(err));
@@ -280,6 +403,60 @@ esp_err_t oled_init(void)
     ESP_LOGI(TAG, "SSD1306 initialized on SDA GPIO %d, SCL GPIO %d",
              OLED_SDA_GPIO, OLED_SCL_GPIO);
     return ESP_OK;
+}
+
+esp_err_t oled_recover(void)
+{
+    if (s_i2c_bus == NULL || s_i2c_dev == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    ESP_LOGW(TAG, "Attempting OLED recovery");
+
+    esp_err_t err = i2c_master_bus_reset(s_i2c_bus);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "I2C bus reset failed: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    err = oled_tx_cmd(0xAEU);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    err = oled_tx_cmd(0x20U);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    err = oled_tx_cmd(0x02U);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    err = oled_apply_orientation();
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    err = oled_tx_cmd(0xA4U);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    err = oled_tx_cmd(0xA6U);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    err = oled_tx_cmd(0xAFU);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    s_last_state_valid = false;
+    memset(s_framebuffer, 0, sizeof(s_framebuffer));
+    return flush_region(0, OLED_HEIGHT);
 }
 
 esp_err_t oled_update(const float temperatures_c[2], bool wifi_connected,
@@ -316,12 +493,9 @@ esp_err_t oled_update(const float temperatures_c[2], bool wifi_connected,
         snprintf(s_last_ip_address, sizeof(s_last_ip_address), "%s", ip_address);
         s_last_state_valid = true;
 
-        return esp_lcd_panel_draw_bitmap(s_panel, 0, 0, OLED_WIDTH, OLED_HEIGHT,
-                                         s_framebuffer);
+        return flush_region(0, OLED_HEIGHT);
     }
 
-    memset(&s_framebuffer[(40 / 8) * OLED_WIDTH], 0,
-           OLED_WIDTH * ((OLED_HEIGHT - 40) / 8));
     draw_dynamic_status(seconds_since_update, update_progress_percent);
-    return flush_region(40, OLED_HEIGHT);
+    return flush_bottom_dots_window();
 }
