@@ -10,6 +10,7 @@
 #include "esp_netif.h"
 #include "esp_http_server.h"
 #include "sensors.h"
+#include "mqtt.h"
 #include "oled.h"
 
 static const char *TAG = "boiler";
@@ -85,13 +86,15 @@ static esp_err_t diag_handler(httpd_req_t *req)
 
     uint64_t sensor0 = sensors_address(0);
     uint64_t sensor1 = sensors_address(1);
+    bool mqtt_connected = mqtt_is_connected();
 
     snprintf(resp, sizeof(resp),
-             "{\"wifi_connected\":%s,\"ip\":\"%s\","
+             "{\"wifi_connected\":%s,\"mqtt_connected\":%s,\"ip\":\"%s\","
              "\"temp_c\":[%.2f,%.2f],\"sensor_count\":%u,"
              "\"sensor_addr\":[\"%016llX\",\"%016llX\"],"
              "\"seconds_since_sensor_update\":%u,\"sensor_update_progress\":%u}",
              s_wifi_connected ? "true" : "false",
+             mqtt_connected ? "true" : "false",
              s_ip_address,
              g_temp_c[0], g_temp_c[1],
              (unsigned)sensors_count(),
@@ -137,12 +140,14 @@ static void display_task(void *arg)
     while (true) {
         uint32_t seconds_since_update = sensors_seconds_since_update();
         uint8_t update_progress_percent = sensors_update_progress_percent();
+        bool mqtt_connected = mqtt_is_connected();
         uint64_t sensor_addresses[2] = {
             sensors_address(0),
             sensors_address(1),
         };
 
-        esp_err_t err = oled_update(g_temp_c, s_wifi_connected, sensor_addresses,
+        esp_err_t err = oled_update(g_temp_c, s_wifi_connected, mqtt_connected,
+                                    sensor_addresses,
                                     s_ip_address,
                                     seconds_since_update, update_progress_percent);
         if (err != ESP_OK) {
@@ -174,6 +179,7 @@ void app_main(void)
 {
     nvs_flash_init();
     wifi_init();
+    mqtt_init();
     http_server_init();
     sensors_init();
     ESP_ERROR_CHECK(oled_init());

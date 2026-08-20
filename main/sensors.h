@@ -3,8 +3,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-extern float g_temp_c[2];
-extern float g_temp_f[2];
+extern float g_temp_c[];
+extern float g_temp_f[];
 
 void sensors_init(void);
 void sensors_task(void *arg);

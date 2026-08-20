@@ -7,14 +7,16 @@
 #include "onewire_device.h"
 #include "ds18b20.h"
 
+#include "mqtt.h"
+
 #define ONEWIRE_PIN GPIO_NUM_4
 #define SENSOR_UPDATE_PERIOD_MS 5000U
 #define MAX_SENSOR_COUNT 8U
 static const char *TAG = "sensors";
 
 // Global temperature arrays
-float g_temp_c[2];
-float g_temp_f[2];
+float g_temp_c[MQTT_SENSOR_VALUE_COUNT];
+float g_temp_f[MQTT_SENSOR_VALUE_COUNT];
 
 // Store bus + devices
 static onewire_bus_handle_t g_bus = NULL;
@@ -119,7 +121,7 @@ void sensors_task(void *arg)
         ds18b20_trigger_temperature_conversion_for_all(g_bus);
 
         // Read each sensor
-        for (size_t i = 0; i < g_device_count && i < 2; i++) {
+        for (size_t i = 0; i < g_device_count && i < MQTT_SENSOR_VALUE_COUNT; i++) {
             float temp_c = 0.0f;
 
             ESP_LOGI(TAG, "Reading sensor %u", (unsigned)i);
@@ -138,6 +140,18 @@ void sensors_task(void *arg)
         }
 
         g_last_update_tick = xTaskGetTickCount();
+
+        size_t publish_count = g_device_count;
+        size_t max_publish_count = MQTT_SENSOR_VALUE_COUNT;
+        if (publish_count > max_publish_count) {
+            publish_count = max_publish_count;
+        }
+
+        esp_err_t publish_err = mqtt_publish_temperatures(g_temp_c, g_device_addresses,
+                                                           publish_count);
+        if (publish_err != ESP_OK && publish_err != ESP_ERR_INVALID_STATE) {
+            ESP_LOGW(TAG, "MQTT publish failed: %s", esp_err_to_name(publish_err));
+        }
 
         vTaskDelay(pdMS_TO_TICKS(SENSOR_UPDATE_PERIOD_MS));
     }

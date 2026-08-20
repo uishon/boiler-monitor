@@ -100,6 +100,7 @@ static void build_rows(char rows[OLED_ROW_COUNT][OLED_COL_COUNT + 1],
                        const float temperatures_c[2],
                        const uint64_t sensor_addresses[2],
                        bool wifi_connected,
+                       bool mqtt_connected,
                        const char *ip_address,
                        uint32_t seconds_since_update,
                        uint8_t update_progress_percent)
@@ -128,11 +129,12 @@ static void build_rows(char rows[OLED_ROW_COUNT][OLED_COL_COUNT + 1],
 
     format_row(rows[2], ip_address);
     format_row(rows[3], wifi_connected ? "CONNECTED" : "CONNECTING");
+    format_row(rows[4], mqtt_connected ? "MQTT OK" : "MQTT WAIT");
 
     snprintf(progress_line, sizeof(progress_line), "UPD %lus %3u%%",
              (unsigned long)seconds_since_update,
              (unsigned)update_progress_percent);
-    format_row(rows[4], progress_line);
+    format_row(rows[5], progress_line);
 
     uint8_t filled = (seconds_since_update >= OLED_PROGRESS_SLOTS)
                          ? OLED_PROGRESS_SLOTS
@@ -142,7 +144,7 @@ static void build_rows(char rows[OLED_ROW_COUNT][OLED_COL_COUNT + 1],
     }
     bar_chars[OLED_PROGRESS_SLOTS] = '\0';
     snprintf(progress_bar, sizeof(progress_bar), "[%s]", bar_chars);
-    format_row(rows[5], progress_bar);
+    format_row(rows[6], progress_bar);
 }
 
 esp_err_t oled_init(void)
@@ -173,6 +175,7 @@ esp_err_t oled_recover(void)
 }
 
 esp_err_t oled_update(const float temperatures_c[2], bool wifi_connected,
+                      bool mqtt_connected,
                       const uint64_t sensor_addresses[2],
                       const char *ip_address,
                       uint32_t seconds_since_update,
@@ -184,7 +187,8 @@ esp_err_t oled_update(const float temperatures_c[2], bool wifi_connected,
     }
 
     char rows[OLED_ROW_COUNT][OLED_COL_COUNT + 1];
-    build_rows(rows, temperatures_c, sensor_addresses, wifi_connected, ip_address,
+    build_rows(rows, temperatures_c, sensor_addresses, wifi_connected, mqtt_connected,
+               ip_address,
                seconds_since_update, update_progress_percent);
 
     for (uint8_t row = 0; row < OLED_ROW_COUNT; row++) {

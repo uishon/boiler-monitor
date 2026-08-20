@@ -12,4 +12,28 @@ config WIFI_PASSWORD
     help
         Password for the Wi-Fi network.
 
+config MQTT_BROKER_URI
+    string "MQTT broker URI"
+    default "mqtt://broker.hivemq.com"
+    help
+        MQTT broker URI used for publishing temperature updates.
+
+config MQTT_TOPIC
+    string "MQTT topic"
+    default "boiler-monitor/temperature"
+    help
+        MQTT topic that receives the temperature JSON payload.
+
+config MQTT_USERNAME
+    string "MQTT username"
+    default ""
+    help
+        Username used when authenticating with the MQTT broker.
+
+config MQTT_PASSWORD
+    string "MQTT password"
+    default ""
+    help
+        Password used when authenticating with the MQTT broker.
+
 endmenu
