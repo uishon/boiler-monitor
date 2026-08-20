@@ -22,6 +22,8 @@ static char s_ip_address[16] = "WAITING";
 #define DISPLAY_TASK_CORE 1
 #endif
 
+#define DISPLAY_RECOVERY_COOLDOWN_MS 250U
+
 static void wifi_event_handler(void *arg, esp_event_base_t event_base,
                                int32_t event_id, void *event_data)
 {
@@ -77,6 +79,32 @@ static esp_err_t status_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+static esp_err_t diag_handler(httpd_req_t *req)
+{
+    char resp[960];
+
+    uint64_t sensor0 = sensors_address(0);
+    uint64_t sensor1 = sensors_address(1);
+
+    snprintf(resp, sizeof(resp),
+             "{\"wifi_connected\":%s,\"ip\":\"%s\","
+             "\"temp_c\":[%.2f,%.2f],\"sensor_count\":%u,"
+             "\"sensor_addr\":[\"%016llX\",\"%016llX\"],"
+             "\"seconds_since_sensor_update\":%u,\"sensor_update_progress\":%u}",
+             s_wifi_connected ? "true" : "false",
+             s_ip_address,
+             g_temp_c[0], g_temp_c[1],
+             (unsigned)sensors_count(),
+             (unsigned long long)sensor0,
+             (unsigned long long)sensor1,
+             (unsigned)sensors_seconds_since_update(),
+             (unsigned)sensors_update_progress_percent());
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, resp);
+    return ESP_OK;
+}
+
 static void http_server_init(void)
 {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
@@ -84,13 +112,21 @@ static void http_server_init(void)
 
     httpd_handle_t server = NULL;
     if (httpd_start(&server, &config) == ESP_OK) {
-        httpd_uri_t update_uri = {
+        httpd_uri_t status_uri = {
             .uri       = "/status",
             .method    = HTTP_GET,
             .handler   = status_handler,
             .user_ctx  = NULL
         };
-        httpd_register_uri_handler(server, &update_uri);
+        httpd_register_uri_handler(server, &status_uri);
+
+        httpd_uri_t diag_uri = {
+            .uri       = "/diag",
+            .method    = HTTP_GET,
+            .handler   = diag_handler,
+            .user_ctx  = NULL
+        };
+        httpd_register_uri_handler(server, &diag_uri);
     }
 }
 
@@ -112,7 +148,9 @@ static void display_task(void *arg)
         if (err != ESP_OK) {
             consecutive_failures++;
             ESP_LOGW(TAG, "OLED update failed: %s", esp_err_to_name(err));
-            if (consecutive_failures >= 3) {
+            bool should_recover_now = (err == ESP_ERR_INVALID_RESPONSE) ||
+                                      (consecutive_failures >= 3);
+            if (should_recover_now) {
                 esp_err_t recover_err = oled_recover();
                 if (recover_err == ESP_OK) {
                     ESP_LOGW(TAG, "OLED recovered after %u failures", consecutive_failures);
@@ -121,6 +159,9 @@ static void display_task(void *arg)
                     ESP_LOGW(TAG, "OLED recovery failed: %s", esp_err_to_name(recover_err));
                     vTaskDelay(pdMS_TO_TICKS(3000));
                 }
+
+                // Brief cooldown helps avoid immediate re-contention on the I2C lines.
+                vTaskDelay(pdMS_TO_TICKS(DISPLAY_RECOVERY_COOLDOWN_MS));
             }
         } else {
             consecutive_failures = 0;

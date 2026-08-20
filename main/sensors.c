@@ -9,6 +9,7 @@
 
 #define ONEWIRE_PIN GPIO_NUM_4
 #define SENSOR_UPDATE_PERIOD_MS 5000U
+#define MAX_SENSOR_COUNT 8U
 static const char *TAG = "sensors";
 
 // Global temperature arrays
@@ -17,8 +18,8 @@ float g_temp_f[2];
 
 // Store bus + devices
 static onewire_bus_handle_t g_bus = NULL;
-static ds18b20_device_handle_t g_devices[8];
-static uint64_t g_device_addresses[8];
+static ds18b20_device_handle_t g_devices[MAX_SENSOR_COUNT];
+static uint64_t g_device_addresses[MAX_SENSOR_COUNT];
 static size_t g_device_count = 0;
 static volatile TickType_t g_last_update_tick;
 
@@ -95,7 +96,7 @@ void sensors_init(void)
         g_device_addresses[g_device_count] = dev.address;
         g_device_count++;
 
-        if (g_device_count >= 8) break;
+        if (g_device_count >= MAX_SENSOR_COUNT) break;
     }
 
     ESP_LOGI(TAG, "Total DS18B20 sensors: %u", g_device_count);
