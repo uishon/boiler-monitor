@@ -5,7 +5,9 @@
 #include "freertos/task.h"
 #include "esp_wifi.h"
 #include "esp_event.h"
+#include "esp_app_desc.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "nvs_flash.h"
 #include "esp_netif.h"
 #include "esp_http_server.h"
@@ -16,6 +18,12 @@
 static const char *TAG = "boiler";
 static bool s_wifi_connected;
 static char s_ip_address[16] = "WAITING";
+static const char *BUILD_DATE = __DATE__;
+static const char *BUILD_TIME = __TIME__;
+
+#ifndef APP_GIT_HASH
+#define APP_GIT_HASH "unknown"
+#endif
 
 #if CONFIG_FREERTOS_UNICORE
 #define DISPLAY_TASK_CORE 0
@@ -87,15 +95,27 @@ static esp_err_t diag_handler(httpd_req_t *req)
     uint64_t sensor0 = sensors_address(0);
     uint64_t sensor1 = sensors_address(1);
     bool mqtt_connected = mqtt_is_connected();
+    uint32_t uptime_seconds = (uint32_t)(esp_timer_get_time() / 1000000ULL);
+    const esp_app_desc_t *app_desc = esp_app_get_description();
+
+    const char *app_version = app_desc->version;
 
     snprintf(resp, sizeof(resp),
              "{\"wifi_connected\":%s,\"mqtt_connected\":%s,\"ip\":\"%s\","
+             "\"uptime_seconds\":%u,"
+             "\"app_version\":\"%s\",\"git_hash\":\"%s\","
+             "\"build_date\":\"%s\",\"build_time\":\"%s\","
              "\"temp_c\":[%.2f,%.2f],\"sensor_count\":%u,"
              "\"sensor_addr\":[\"%016llX\",\"%016llX\"],"
              "\"seconds_since_sensor_update\":%u,\"sensor_update_progress\":%u}",
              s_wifi_connected ? "true" : "false",
              mqtt_connected ? "true" : "false",
              s_ip_address,
+             (unsigned)uptime_seconds,
+             app_version,
+             APP_GIT_HASH,
+             BUILD_DATE,
+             BUILD_TIME,
              g_temp_c[0], g_temp_c[1],
              (unsigned)sensors_count(),
              (unsigned long long)sensor0,

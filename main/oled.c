@@ -131,7 +131,7 @@ static void build_rows(char rows[OLED_ROW_COUNT][OLED_COL_COUNT + 1],
     format_row(rows[3], wifi_connected ? "CONNECTED" : "CONNECTING");
     format_row(rows[4], mqtt_connected ? "MQTT OK" : "MQTT WAIT");
 
-    snprintf(progress_line, sizeof(progress_line), "UPD %lus %3u%%",
+    snprintf(progress_line, sizeof(progress_line), "LOOP %lus %3u%%",
              (unsigned long)seconds_since_update,
              (unsigned)update_progress_percent);
     format_row(rows[5], progress_line);
