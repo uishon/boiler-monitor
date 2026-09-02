@@ -21,10 +21,6 @@ static char s_ip_address[16] = "WAITING";
 static const char *BUILD_DATE = __DATE__;
 static const char *BUILD_TIME = __TIME__;
 
-#ifndef APP_GIT_HASH
-#define APP_GIT_HASH "unknown"
-#endif
-
 #if CONFIG_FREERTOS_UNICORE
 #define DISPLAY_TASK_CORE 0
 #else
@@ -97,8 +93,8 @@ static esp_err_t diag_handler(httpd_req_t *req)
     bool mqtt_connected = mqtt_is_connected();
     uint32_t uptime_seconds = (uint32_t)(esp_timer_get_time() / 1000000ULL);
     const esp_app_desc_t *app_desc = esp_app_get_description();
-
     const char *app_version = app_desc->version;
+    const char *git_hash = esp_app_get_elf_sha256_str();
 
     snprintf(resp, sizeof(resp),
              "{\"wifi_connected\":%s,\"mqtt_connected\":%s,\"ip\":\"%s\","
@@ -113,7 +109,7 @@ static esp_err_t diag_handler(httpd_req_t *req)
              s_ip_address,
              (unsigned)uptime_seconds,
              app_version,
-             APP_GIT_HASH,
+             git_hash,
              BUILD_DATE,
              BUILD_TIME,
              g_temp_c[0], g_temp_c[1],
