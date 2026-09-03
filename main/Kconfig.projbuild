@@ -24,6 +24,12 @@ config MQTT_TOPIC
     help
         MQTT topic that receives the temperature JSON payload.
 
+config MQTT_CLIENT_ID
+    string "MQTT client ID"
+    default "boiler-monitor"
+    help
+        Client identifier used when connecting to the MQTT broker.
+
 config MQTT_USERNAME
     string "MQTT username"
     default ""
