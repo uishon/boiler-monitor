@@ -79,7 +79,7 @@ static esp_err_t oled_hw_init(void)
     u8x8_InitDisplay(&s_u8x8);
     u8x8_SetPowerSave(&s_u8x8, 0);
     u8x8_SetFlipMode(&s_u8x8, 0);
-    u8x8_SetFont(&s_u8x8, u8x8_font_chroma48medium8_r);
+    u8x8_SetFont(&s_u8x8, u8x8_font_victoriamedium8_r);
     u8x8_ClearDisplay(&s_u8x8);
 
     s_initialized = true;
@@ -108,23 +108,23 @@ static void build_rows(char rows[OLED_ROW_COUNT][OLED_COL_COUNT + 1],
     char temp_line[OLED_COL_COUNT + 1];
     char progress_line[OLED_COL_COUNT + 1];
     char progress_bar[OLED_COL_COUNT + 1];
-    char sensor0_label[5];
-    char sensor1_label[5];
+    char sensor0_id[5];
+    char sensor1_id[5];
     char bar_chars[OLED_PROGRESS_SLOTS + 1];
 
     for (size_t row = 0; row < OLED_ROW_COUNT; row++) {
         format_row(rows[row], "");
     }
 
-    snprintf(sensor0_label, sizeof(sensor0_label), "%04llX",
+    snprintf(sensor0_id, sizeof(sensor0_id), "%04llX",
              (unsigned long long)(sensor_addresses[0] & 0xFFFFULL));
-    snprintf(sensor1_label, sizeof(sensor1_label), "%04llX",
+    snprintf(sensor1_id, sizeof(sensor1_id), "%04llX",
              (unsigned long long)(sensor_addresses[1] & 0xFFFFULL));
 
-    snprintf(temp_line, sizeof(temp_line), "%s %5.1fC", sensor0_label, temperatures_c[0]);
+    snprintf(temp_line, sizeof(temp_line), "%s %5.1fC", sensor0_id, temperatures_c[0]);
     format_row(rows[0], temp_line);
 
-    snprintf(temp_line, sizeof(temp_line), "%s %5.1fC", sensor1_label, temperatures_c[1]);
+    snprintf(temp_line, sizeof(temp_line), "%s %5.1fC", sensor1_id, temperatures_c[1]);
     format_row(rows[1], temp_line);
 
     format_row(rows[2], ip_address);
@@ -145,6 +145,7 @@ static void build_rows(char rows[OLED_ROW_COUNT][OLED_COL_COUNT + 1],
     bar_chars[OLED_PROGRESS_SLOTS] = '\0';
     snprintf(progress_bar, sizeof(progress_bar), "[%s]", bar_chars);
     format_row(rows[6], progress_bar);
+    format_row(rows[7], "");
 }
 
 esp_err_t oled_init(void)
