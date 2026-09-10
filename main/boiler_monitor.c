@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdarg.h>
 #include <string.h>
 #include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
@@ -28,6 +29,42 @@ static const char *BUILD_TIME = __TIME__;
 #endif
 
 #define DISPLAY_RECOVERY_COOLDOWN_MS 250U
+#define LOG_BUFFER_SIZE 2048U
+#define LOG_LINE_SIZE 256U
+
+static vprintf_like_t s_default_log_output;
+static portMUX_TYPE s_log_lock = portMUX_INITIALIZER_UNLOCKED;
+static char s_log_buffer[LOG_BUFFER_SIZE];
+static size_t s_log_buffer_used;
+
+static int log_capture_vprintf(const char *format, va_list arguments)
+{
+    char line[LOG_LINE_SIZE];
+    va_list copy;
+    va_copy(copy, arguments);
+    int written = vsnprintf(line, sizeof(line), format, copy);
+    va_end(copy);
+
+    if (written > 0) {
+        size_t length = (size_t)written;
+        if (length >= sizeof(line)) {
+            length = sizeof(line) - 1U;
+        }
+
+        taskENTER_CRITICAL(&s_log_lock);
+        size_t discard = s_log_buffer_used + length;
+        if (discard > sizeof(s_log_buffer)) {
+            discard -= sizeof(s_log_buffer);
+            memmove(s_log_buffer, s_log_buffer + discard, s_log_buffer_used - discard);
+            s_log_buffer_used -= discard;
+        }
+        memcpy(s_log_buffer + s_log_buffer_used, line, length);
+        s_log_buffer_used += length;
+        taskEXIT_CRITICAL(&s_log_lock);
+    }
+
+    return s_default_log_output(format, arguments);
+}
 
 static void wifi_event_handler(void *arg, esp_event_base_t event_base,
                                int32_t event_id, void *event_data)
@@ -35,9 +72,17 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
         esp_wifi_connect();
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        wifi_event_sta_disconnected_t *event =
+            (wifi_event_sta_disconnected_t *)event_data;
         s_wifi_connected = false;
         snprintf(s_ip_address, sizeof(s_ip_address), "WAITING");
+        ESP_LOGW(TAG, "Wi-Fi disconnected (reason=%d); reconnecting", event->reason);
         esp_wifi_connect();
+    } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_LOST_IP) {
+        s_wifi_connected = false;
+        snprintf(s_ip_address, sizeof(s_ip_address), "WAITING");
+        ESP_LOGW(TAG, "Wi-Fi lost its IP address; reconnecting");
+        esp_wifi_disconnect();
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
         s_wifi_connected = true;
@@ -70,6 +115,7 @@ static void wifi_init(void)
     esp_wifi_set_mode(WIFI_MODE_STA);
     esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
     esp_wifi_start();
+    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
 }
 
 static esp_err_t status_handler(httpd_req_t *req)
@@ -124,6 +170,20 @@ static esp_err_t diag_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+static esp_err_t logs_handler(httpd_req_t *req)
+{
+    char response[LOG_BUFFER_SIZE + 1U];
+
+    taskENTER_CRITICAL(&s_log_lock);
+    memcpy(response, s_log_buffer, s_log_buffer_used);
+    response[s_log_buffer_used] = '\0';
+    taskEXIT_CRITICAL(&s_log_lock);
+
+    httpd_resp_set_type(req, "text/plain");
+    httpd_resp_sendstr(req, response);
+    return ESP_OK;
+}
+
 static void http_server_init(void)
 {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
@@ -146,6 +206,14 @@ static void http_server_init(void)
             .user_ctx  = NULL
         };
         httpd_register_uri_handler(server, &diag_uri);
+
+        httpd_uri_t logs_uri = {
+            .uri       = "/logs",
+            .method    = HTTP_GET,
+            .handler   = logs_handler,
+            .user_ctx  = NULL
+        };
+        httpd_register_uri_handler(server, &logs_uri);
     }
 }
 
@@ -193,6 +261,7 @@ static void display_task(void *arg)
 
 void app_main(void)
 {
+    s_default_log_output = esp_log_set_vprintf(log_capture_vprintf);
     nvs_flash_init();
     wifi_init();
     mqtt_init();
