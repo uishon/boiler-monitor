@@ -4,6 +4,7 @@
 
 #include "sdkconfig.h"
 
+#include "esp_mac.h"
 #include "esp_log.h"
 #include "mqtt_client.h"
 
@@ -28,6 +29,7 @@
 static const char *TAG = "mqtt";
 static esp_mqtt_client_handle_t s_client;
 static bool s_connected;
+static char s_client_id[64];
 
 static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
                                int32_t event_id, void *event_data)
@@ -57,13 +59,19 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
 
 void mqtt_init(void)
 {
+    uint8_t mac[6];
+    ESP_ERROR_CHECK(esp_read_mac(mac, ESP_MAC_WIFI_STA));
+    snprintf(s_client_id, sizeof(s_client_id), "%s-%02X%02X%02X",
+             CONFIG_MQTT_CLIENT_ID, mac[3], mac[4], mac[5]);
+
     const esp_mqtt_client_config_t mqtt_cfg = {
         .broker.address.uri = CONFIG_MQTT_BROKER_URI,
         .credentials.username = CONFIG_MQTT_USERNAME,
         .credentials.authentication.password = CONFIG_MQTT_PASSWORD,
-        .credentials.client_id = CONFIG_MQTT_CLIENT_ID,
+        .credentials.client_id = s_client_id,
     };
 
+    ESP_LOGI(TAG, "Connecting with client ID %s", s_client_id);
     s_client = esp_mqtt_client_init(&mqtt_cfg);
     ESP_ERROR_CHECK(esp_mqtt_client_register_event(s_client, ESP_EVENT_ANY_ID,
                                                    mqtt_event_handler, NULL));
