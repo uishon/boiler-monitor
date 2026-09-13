@@ -30,6 +30,7 @@ static const char *TAG = "mqtt";
 static esp_mqtt_client_handle_t s_client;
 static bool s_connected;
 static char s_client_id[64];
+static char s_topic[128];
 
 static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
                                int32_t event_id, void *event_data)
@@ -63,6 +64,8 @@ void mqtt_init(void)
     ESP_ERROR_CHECK(esp_read_mac(mac, ESP_MAC_WIFI_STA));
     snprintf(s_client_id, sizeof(s_client_id), "%s-%02X%02X%02X",
              CONFIG_MQTT_CLIENT_ID, mac[3], mac[4], mac[5]);
+    snprintf(s_topic, sizeof(s_topic), "%s/%02X%02X%02X",
+             CONFIG_MQTT_TOPIC, mac[3], mac[4], mac[5]);
 
     const esp_mqtt_client_config_t mqtt_cfg = {
         .broker.address.uri = CONFIG_MQTT_BROKER_URI,
@@ -122,11 +125,11 @@ esp_err_t mqtt_publish_temperatures(const float temperatures_c[MQTT_SENSOR_VALUE
         return ESP_ERR_NO_MEM;
     }
 
-    int msg_id = esp_mqtt_client_publish(s_client, CONFIG_MQTT_TOPIC, payload, 0, 1, 0);
+    int msg_id = esp_mqtt_client_publish(s_client, s_topic, payload, 0, 1, 0);
     if (msg_id < 0) {
         return ESP_FAIL;
     }
 
-    ESP_LOGI(TAG, "Published %s to %s", payload, CONFIG_MQTT_TOPIC);
+    ESP_LOGI(TAG, "Published %s to %s", payload, s_topic);
     return ESP_OK;
 }

@@ -22,7 +22,8 @@ config MQTT_TOPIC
     string "MQTT topic"
     default "boiler-monitor/temperature"
     help
-        MQTT topic that receives the temperature JSON payload.
+        Base MQTT topic that receives the temperature JSON payload. The final
+        topic appends the device MAC suffix, for example: /A1B2C3.
 
 config MQTT_CLIENT_ID
     string "MQTT client ID"
