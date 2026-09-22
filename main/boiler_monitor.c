@@ -89,6 +89,9 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
         snprintf(s_ip_address, sizeof(s_ip_address), IPSTR,
                  IP2STR(&event->ip_info.ip));
         ESP_LOGI(TAG, "Got IP: " IPSTR, IP2STR(&event->ip_info.ip));
+    } else {
+        ESP_LOGI(TAG, "Unhandled Wi-Fi/IP event: base=%s id=%ld",
+                 event_base, (long)event_id);
     }
 }
 
@@ -103,7 +106,7 @@ static void wifi_init(void)
 
     esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID,
                                         &wifi_event_handler, NULL, NULL);
-    esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP,
+    esp_event_handler_instance_register(IP_EVENT, ESP_EVENT_ANY_ID,
                                         &wifi_event_handler, NULL, NULL);
 
     wifi_config_t wifi_config = {0};
