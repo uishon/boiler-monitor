@@ -19,6 +19,7 @@
 static const char *TAG = "boiler";
 static bool s_wifi_connected;
 static char s_ip_address[16] = "WAITING";
+static uint8_t s_wifi_disconnect_reason;
 static const char *BUILD_DATE = __DATE__;
 static const char *BUILD_TIME = __TIME__;
 
@@ -75,6 +76,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
         wifi_event_sta_disconnected_t *event =
             (wifi_event_sta_disconnected_t *)event_data;
         s_wifi_connected = false;
+        s_wifi_disconnect_reason = event->reason;
         snprintf(s_ip_address, sizeof(s_ip_address), "WAITING");
         ESP_LOGW(TAG, "Wi-Fi disconnected (reason=%d); reconnecting", event->reason);
         esp_wifi_connect();
@@ -232,10 +234,20 @@ static void display_task(void *arg)
             sensors_address(0),
             sensors_address(1),
         };
+        char wifi_display[sizeof(s_ip_address)];
+        if (!s_wifi_connected)
+        {
+            snprintf(wifi_display, sizeof(wifi_display), "WAITING %u",
+                     (unsigned)s_wifi_disconnect_reason);
+        }
+        else
+        {
+            snprintf(wifi_display, sizeof(wifi_display), "%s", s_ip_address);
+        }
 
         esp_err_t err = oled_update(g_temp_c, s_wifi_connected, mqtt_connected,
                                     sensor_addresses,
-                                    s_ip_address,
+                                    wifi_display,
                                     seconds_since_update, update_progress_percent);
         if (err != ESP_OK) {
             consecutive_failures++;
