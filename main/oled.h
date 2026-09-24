@@ -8,6 +8,7 @@
 esp_err_t oled_init(void);
 esp_err_t oled_recover(void);
 esp_err_t oled_update(const float temperatures_c[2], bool wifi_connected,
+                      int8_t wifi_rssi_dbm, bool wifi_rssi_valid,
                       bool mqtt_connected,
                       const uint64_t sensor_addresses[2],
                       const char *ip_address,

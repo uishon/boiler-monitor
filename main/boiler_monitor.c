@@ -234,10 +234,20 @@ static void display_task(void *arg)
             sensors_address(0),
             sensors_address(1),
         };
-        char wifi_display[sizeof(s_ip_address)];
+        wifi_ap_record_t ap_info = {0};
+        esp_err_t wifi_rssi_err = ESP_ERR_WIFI_NOT_CONNECT;
+        if (s_wifi_connected) {
+            wifi_rssi_err = esp_wifi_sta_get_ap_info(&ap_info);
+        }
+        bool wifi_rssi_valid = s_wifi_connected && wifi_rssi_err == ESP_OK;
+        if (s_wifi_connected && wifi_rssi_err != ESP_OK) {
+            ESP_LOGW(TAG, "Wi-Fi RSSI lookup failed: %s",
+                     esp_err_to_name(wifi_rssi_err));
+        }
+        char wifi_display[sizeof(s_ip_address) + 1U];
         if (!s_wifi_connected)
         {
-            snprintf(wifi_display, sizeof(wifi_display), "WAITING %u",
+            snprintf(wifi_display, sizeof(wifi_display), "DISCONNECTED %u",
                      (unsigned)s_wifi_disconnect_reason);
         }
         else
@@ -245,7 +255,8 @@ static void display_task(void *arg)
             snprintf(wifi_display, sizeof(wifi_display), "%s", s_ip_address);
         }
 
-        esp_err_t err = oled_update(g_temp_c, s_wifi_connected, mqtt_connected,
+        esp_err_t err = oled_update(g_temp_c, s_wifi_connected,
+                                    ap_info.rssi, wifi_rssi_valid, mqtt_connected,
                                     sensor_addresses,
                                     wifi_display,
                                     seconds_since_update, update_progress_percent);

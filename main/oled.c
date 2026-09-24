@@ -100,6 +100,8 @@ static void build_rows(char rows[OLED_ROW_COUNT][OLED_COL_COUNT + 1],
                        const float temperatures_c[2],
                        const uint64_t sensor_addresses[2],
                        bool wifi_connected,
+                       int8_t wifi_rssi_dbm,
+                       bool wifi_rssi_valid,
                        bool mqtt_connected,
                        const char *ip_address,
                        uint32_t seconds_since_update,
@@ -128,7 +130,12 @@ static void build_rows(char rows[OLED_ROW_COUNT][OLED_COL_COUNT + 1],
     format_row(rows[1], temp_line);
 
     format_row(rows[2], ip_address);
-    format_row(rows[3], wifi_connected ? "CONNECTED" : "CONNECTING");
+    if (wifi_connected && wifi_rssi_valid) {
+        snprintf(temp_line, sizeof(temp_line), "WIFI OK %ddBm", wifi_rssi_dbm);
+        format_row(rows[3], temp_line);
+    } else {
+        format_row(rows[3], wifi_connected ? "WIFI OK" : "WIFI WAIT");
+    }
     format_row(rows[4], mqtt_connected ? "MQTT OK" : "MQTT WAIT");
 
     snprintf(progress_line, sizeof(progress_line), "LOOP %lus %3u%%",
@@ -176,6 +183,7 @@ esp_err_t oled_recover(void)
 }
 
 esp_err_t oled_update(const float temperatures_c[2], bool wifi_connected,
+                      int8_t wifi_rssi_dbm, bool wifi_rssi_valid,
                       bool mqtt_connected,
                       const uint64_t sensor_addresses[2],
                       const char *ip_address,
@@ -188,7 +196,8 @@ esp_err_t oled_update(const float temperatures_c[2], bool wifi_connected,
     }
 
     char rows[OLED_ROW_COUNT][OLED_COL_COUNT + 1];
-    build_rows(rows, temperatures_c, sensor_addresses, wifi_connected, mqtt_connected,
+    build_rows(rows, temperatures_c, sensor_addresses, wifi_connected,
+               wifi_rssi_dbm, wifi_rssi_valid, mqtt_connected,
                ip_address,
                seconds_since_update, update_progress_percent);
 
