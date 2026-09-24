@@ -8,6 +8,7 @@
 #include "esp_event.h"
 #include "esp_app_desc.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 #include "nvs_flash.h"
 #include "esp_netif.h"
@@ -18,6 +19,8 @@
 
 static const char *TAG = "boiler";
 static bool s_wifi_connected;
+static int64_t s_wifi_disconnected_since_us;
+static bool s_wifi_watchdog_test_pending;
 static char s_ip_address[16] = "WAITING";
 static uint8_t s_wifi_disconnect_reason;
 static const char *BUILD_DATE = __DATE__;
@@ -30,6 +33,7 @@ static const char *BUILD_TIME = __TIME__;
 #endif
 
 #define DISPLAY_RECOVERY_COOLDOWN_MS 250U
+#define WIFI_DISCONNECT_RESTART_US (5ULL * 60ULL * 1000000ULL)
 #define LOG_BUFFER_SIZE 2048U
 #define LOG_LINE_SIZE 256U
 
@@ -75,12 +79,18 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         wifi_event_sta_disconnected_t *event =
             (wifi_event_sta_disconnected_t *)event_data;
+        if (s_wifi_connected) {
+            s_wifi_disconnected_since_us = esp_timer_get_time();
+        }
         s_wifi_connected = false;
         s_wifi_disconnect_reason = event->reason;
         snprintf(s_ip_address, sizeof(s_ip_address), "WAITING");
         ESP_LOGW(TAG, "Wi-Fi disconnected (reason=%d); reconnecting", event->reason);
         esp_wifi_connect();
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_LOST_IP) {
+        if (s_wifi_connected) {
+            s_wifi_disconnected_since_us = esp_timer_get_time();
+        }
         s_wifi_connected = false;
         snprintf(s_ip_address, sizeof(s_ip_address), "WAITING");
         ESP_LOGW(TAG, "Wi-Fi lost its IP address; reconnecting");
@@ -88,6 +98,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
         s_wifi_connected = true;
+        s_wifi_disconnected_since_us = 0;
         snprintf(s_ip_address, sizeof(s_ip_address), IPSTR,
                  IP2STR(&event->ip_info.ip));
         ESP_LOGI(TAG, "Got IP: " IPSTR, IP2STR(&event->ip_info.ip));
@@ -189,6 +200,29 @@ static esp_err_t logs_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+static esp_err_t help_handler(httpd_req_t *req)
+{
+    static const char response[] =
+        "/status - temperatures\n"
+        "/info - diagnostics\n"
+        "/logs - captured logs\n"
+        "/watchdog - schedule watchdog restart\n"
+        "/help - available commands\n";
+
+    httpd_resp_set_type(req, "text/plain");
+    httpd_resp_sendstr(req, response);
+    return ESP_OK;
+}
+
+static esp_err_t watchdog_test_handler(httpd_req_t *req)
+{
+    s_wifi_disconnected_since_us = esp_timer_get_time() - WIFI_DISCONNECT_RESTART_US;
+    s_wifi_watchdog_test_pending = true;
+    httpd_resp_set_type(req, "text/plain");
+    httpd_resp_sendstr(req, "Wi-Fi watchdog restart scheduled");
+    return ESP_OK;
+}
+
 static void http_server_init(void)
 {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
@@ -205,7 +239,7 @@ static void http_server_init(void)
         httpd_register_uri_handler(server, &status_uri);
 
         httpd_uri_t diag_uri = {
-            .uri       = "/diag",
+            .uri       = "/info",
             .method    = HTTP_GET,
             .handler   = diag_handler,
             .user_ctx  = NULL
@@ -219,6 +253,22 @@ static void http_server_init(void)
             .user_ctx  = NULL
         };
         httpd_register_uri_handler(server, &logs_uri);
+
+        httpd_uri_t help_uri = {
+            .uri       = "/help",
+            .method    = HTTP_GET,
+            .handler   = help_handler,
+            .user_ctx  = NULL
+        };
+        httpd_register_uri_handler(server, &help_uri);
+
+        httpd_uri_t watchdog_test_uri = {
+            .uri       = "/watchdog",
+            .method    = HTTP_GET,
+            .handler   = watchdog_test_handler,
+            .user_ctx  = NULL
+        };
+        httpd_register_uri_handler(server, &watchdog_test_uri);
     }
 }
 
@@ -285,9 +335,19 @@ static void display_task(void *arg)
     }
 }
 
+static void wifi_disconnect_watchdog_check(void)
+{
+    if ((s_wifi_watchdog_test_pending || !s_wifi_connected) &&
+        esp_timer_get_time() - s_wifi_disconnected_since_us >= WIFI_DISCONNECT_RESTART_US) {
+        ESP_LOGE(TAG, "Wi-Fi watchdog restarting device");
+        esp_restart();
+    }
+}
+
 void app_main(void)
 {
     s_default_log_output = esp_log_set_vprintf(log_capture_vprintf);
+    s_wifi_disconnected_since_us = esp_timer_get_time();
     nvs_flash_init();
     wifi_init();
     mqtt_init();
@@ -299,6 +359,7 @@ void app_main(void)
                             DISPLAY_TASK_CORE);
 
     while (true) {
+        wifi_disconnect_watchdog_check();
         vTaskDelay(pdMS_TO_TICKS(10000));
     }
 }
