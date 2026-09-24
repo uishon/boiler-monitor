@@ -19,8 +19,7 @@
 
 static const char *TAG = "boiler";
 static bool s_wifi_connected;
-static int64_t s_wifi_disconnected_since_us;
-static bool s_wifi_watchdog_test_pending;
+static bool s_mqtt_watchdog_test_pending;
 static char s_ip_address[16] = "WAITING";
 static uint8_t s_wifi_disconnect_reason;
 static const char *BUILD_DATE = __DATE__;
@@ -33,7 +32,7 @@ static const char *BUILD_TIME = __TIME__;
 #endif
 
 #define DISPLAY_RECOVERY_COOLDOWN_MS 250U
-#define WIFI_DISCONNECT_RESTART_US (5ULL * 60ULL * 1000000ULL)
+#define MQTT_PUBLISH_WATCHDOG_US (5ULL * 60ULL * 1000000ULL)
 #define LOG_BUFFER_SIZE 2048U
 #define LOG_LINE_SIZE 256U
 
@@ -79,18 +78,12 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         wifi_event_sta_disconnected_t *event =
             (wifi_event_sta_disconnected_t *)event_data;
-        if (s_wifi_connected) {
-            s_wifi_disconnected_since_us = esp_timer_get_time();
-        }
         s_wifi_connected = false;
         s_wifi_disconnect_reason = event->reason;
         snprintf(s_ip_address, sizeof(s_ip_address), "WAITING");
         ESP_LOGW(TAG, "Wi-Fi disconnected (reason=%d); reconnecting", event->reason);
         esp_wifi_connect();
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_LOST_IP) {
-        if (s_wifi_connected) {
-            s_wifi_disconnected_since_us = esp_timer_get_time();
-        }
         s_wifi_connected = false;
         snprintf(s_ip_address, sizeof(s_ip_address), "WAITING");
         ESP_LOGW(TAG, "Wi-Fi lost its IP address; reconnecting");
@@ -98,7 +91,6 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
         s_wifi_connected = true;
-        s_wifi_disconnected_since_us = 0;
         snprintf(s_ip_address, sizeof(s_ip_address), IPSTR,
                  IP2STR(&event->ip_info.ip));
         ESP_LOGI(TAG, "Got IP: " IPSTR, IP2STR(&event->ip_info.ip));
@@ -157,6 +149,8 @@ static esp_err_t info_handler(httpd_req_t *req)
     bool wifi_rssi_valid = s_wifi_connected &&
                            esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK;
     uint32_t uptime_seconds = (uint32_t)(esp_timer_get_time() / 1000000ULL);
+    uint32_t mqtt_last_published_seconds =
+        (uint32_t)(mqtt_last_published_us() / 1000000ULL);
     const esp_app_desc_t *app_desc = esp_app_get_description();
     const char *app_version = app_desc->version;
     const char *git_hash = esp_app_get_elf_sha256_str();
@@ -164,6 +158,7 @@ static esp_err_t info_handler(httpd_req_t *req)
     snprintf(resp, sizeof(resp),
              "{\"wifi_connected\":%s,\"mqtt_connected\":%s,\"ip\":\"%s\","
              "\"wifi_rssi_dbm\":%d,\"wifi_rssi_valid\":%s,"
+             "\"mqtt_last_published_seconds\":%u,"
              "\"uptime_seconds\":%u,"
              "\"app_version\":\"%s\",\"git_hash\":\"%s\","
              "\"build_date\":\"%s\",\"build_time\":\"%s\","
@@ -175,6 +170,7 @@ static esp_err_t info_handler(httpd_req_t *req)
              s_ip_address,
              (int)ap_info.rssi,
              wifi_rssi_valid ? "true" : "false",
+             (unsigned)mqtt_last_published_seconds,
              (unsigned)uptime_seconds,
              app_version,
              git_hash,
@@ -222,8 +218,7 @@ static esp_err_t help_handler(httpd_req_t *req)
 
 static esp_err_t watchdog_test_handler(httpd_req_t *req)
 {
-    s_wifi_disconnected_since_us = esp_timer_get_time() - WIFI_DISCONNECT_RESTART_US;
-    s_wifi_watchdog_test_pending = true;
+    s_mqtt_watchdog_test_pending = true;
     httpd_resp_set_type(req, "text/plain");
     httpd_resp_sendstr(req, "Wi-Fi watchdog restart scheduled");
     return ESP_OK;
@@ -341,11 +336,14 @@ static void display_task(void *arg)
     }
 }
 
-static void wifi_disconnect_watchdog_check(void)
+static void mqtt_publish_watchdog_check(void)
 {
-    if ((s_wifi_watchdog_test_pending || !s_wifi_connected) &&
-        esp_timer_get_time() - s_wifi_disconnected_since_us >= WIFI_DISCONNECT_RESTART_US) {
-        ESP_LOGE(TAG, "Wi-Fi watchdog restarting device");
+    int64_t last_published_us = mqtt_last_published_us();
+    bool mqtt_publish_overdue =
+        esp_timer_get_time() - last_published_us >= MQTT_PUBLISH_WATCHDOG_US;
+
+    if (s_mqtt_watchdog_test_pending || mqtt_publish_overdue) {
+        ESP_LOGE(TAG, "MQTT publish watchdog restarting device");
         esp_restart();
     }
 }
@@ -353,7 +351,6 @@ static void wifi_disconnect_watchdog_check(void)
 void app_main(void)
 {
     s_default_log_output = esp_log_set_vprintf(log_capture_vprintf);
-    s_wifi_disconnected_since_us = esp_timer_get_time();
     nvs_flash_init();
     wifi_init();
     mqtt_init();
@@ -365,7 +362,7 @@ void app_main(void)
                             DISPLAY_TASK_CORE);
 
     while (true) {
-        wifi_disconnect_watchdog_check();
+        mqtt_publish_watchdog_check();
         vTaskDelay(pdMS_TO_TICKS(10000));
     }
 }

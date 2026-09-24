@@ -10,6 +10,7 @@
 
 void mqtt_init(void);
 bool mqtt_is_connected(void);
+int64_t mqtt_last_published_us(void);
 esp_err_t mqtt_publish_temperatures(const float temperatures_c[MQTT_SENSOR_VALUE_COUNT],
                                     const uint64_t sensor_addresses[MQTT_SENSOR_VALUE_COUNT],
                                     size_t sensor_count);

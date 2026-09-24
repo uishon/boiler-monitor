@@ -6,6 +6,7 @@
 
 #include "esp_mac.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "mqtt_client.h"
 
 #include "mqtt.h"
@@ -29,6 +30,7 @@
 static const char *TAG = "mqtt";
 static esp_mqtt_client_handle_t s_client;
 static bool s_connected;
+static int64_t s_last_published_us;
 static char s_client_id[64];
 static char s_topic[128];
 
@@ -49,6 +51,9 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
         s_connected = false;
         ESP_LOGW(TAG, "MQTT disconnected");
         break;
+    case MQTT_EVENT_PUBLISHED:
+        s_last_published_us = esp_timer_get_time();
+        break;
     case MQTT_EVENT_ERROR:
         ESP_LOGW(TAG, "MQTT error");
         break;
@@ -61,6 +66,7 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
 void mqtt_init(void)
 {
     uint8_t mac[6];
+    s_last_published_us = esp_timer_get_time();
     ESP_ERROR_CHECK(esp_read_mac(mac, ESP_MAC_WIFI_STA));
     snprintf(s_client_id, sizeof(s_client_id), "%s-%02X%02X%02X",
              CONFIG_MQTT_CLIENT_ID, mac[3], mac[4], mac[5]);
@@ -84,6 +90,11 @@ void mqtt_init(void)
 bool mqtt_is_connected(void)
 {
     return s_connected;
+}
+
+int64_t mqtt_last_published_us(void)
+{
+    return s_last_published_us;
 }
 
 esp_err_t mqtt_publish_temperatures(const float temperatures_c[MQTT_SENSOR_VALUE_COUNT],
