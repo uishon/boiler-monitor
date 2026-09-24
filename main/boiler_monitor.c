@@ -146,13 +146,16 @@ static esp_err_t status_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
-static esp_err_t diag_handler(httpd_req_t *req)
+static esp_err_t info_handler(httpd_req_t *req)
 {
     char resp[960];
 
     uint64_t sensor0 = sensors_address(0);
     uint64_t sensor1 = sensors_address(1);
     bool mqtt_connected = mqtt_is_connected();
+    wifi_ap_record_t ap_info = {0};
+    bool wifi_rssi_valid = s_wifi_connected &&
+                           esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK;
     uint32_t uptime_seconds = (uint32_t)(esp_timer_get_time() / 1000000ULL);
     const esp_app_desc_t *app_desc = esp_app_get_description();
     const char *app_version = app_desc->version;
@@ -160,6 +163,7 @@ static esp_err_t diag_handler(httpd_req_t *req)
 
     snprintf(resp, sizeof(resp),
              "{\"wifi_connected\":%s,\"mqtt_connected\":%s,\"ip\":\"%s\","
+             "\"wifi_rssi_dbm\":%d,\"wifi_rssi_valid\":%s,"
              "\"uptime_seconds\":%u,"
              "\"app_version\":\"%s\",\"git_hash\":\"%s\","
              "\"build_date\":\"%s\",\"build_time\":\"%s\","
@@ -169,6 +173,8 @@ static esp_err_t diag_handler(httpd_req_t *req)
              s_wifi_connected ? "true" : "false",
              mqtt_connected ? "true" : "false",
              s_ip_address,
+             (int)ap_info.rssi,
+             wifi_rssi_valid ? "true" : "false",
              (unsigned)uptime_seconds,
              app_version,
              git_hash,
@@ -238,13 +244,13 @@ static void http_server_init(void)
         };
         httpd_register_uri_handler(server, &status_uri);
 
-        httpd_uri_t diag_uri = {
+        httpd_uri_t info_uri = {
             .uri       = "/info",
             .method    = HTTP_GET,
-            .handler   = diag_handler,
+            .handler   = info_handler,
             .user_ctx  = NULL
         };
-        httpd_register_uri_handler(server, &diag_uri);
+        httpd_register_uri_handler(server, &info_uri);
 
         httpd_uri_t logs_uri = {
             .uri       = "/logs",
