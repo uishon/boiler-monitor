@@ -20,6 +20,7 @@
 static const char *TAG = "boiler";
 static bool s_wifi_connected;
 static bool s_mqtt_watchdog_test_pending;
+static bool s_mqtt_network_recovery_attempted;
 static char s_ip_address[16] = "WAITING";
 static uint8_t s_wifi_disconnect_reason;
 static const char *BUILD_DATE = __DATE__;
@@ -32,6 +33,7 @@ static const char *BUILD_TIME = __TIME__;
 #endif
 
 #define DISPLAY_RECOVERY_COOLDOWN_MS 250U
+#define MQTT_NETWORK_RECOVERY_US (60ULL * 1000000ULL)
 #define MQTT_PUBLISH_WATCHDOG_US (5ULL * 60ULL * 1000000ULL)
 #define LOG_BUFFER_SIZE 2048U
 #define LOG_LINE_SIZE 256U
@@ -339,8 +341,16 @@ static void display_task(void *arg)
 static void mqtt_publish_watchdog_check(void)
 {
     int64_t last_published_us = mqtt_last_published_us();
-    bool mqtt_publish_overdue =
-        esp_timer_get_time() - last_published_us >= MQTT_PUBLISH_WATCHDOG_US;
+    int64_t publish_age_us = esp_timer_get_time() - last_published_us;
+    bool mqtt_publish_overdue = publish_age_us >= MQTT_PUBLISH_WATCHDOG_US;
+
+    if (publish_age_us < MQTT_NETWORK_RECOVERY_US) {
+        s_mqtt_network_recovery_attempted = false;
+    } else if (!s_mqtt_network_recovery_attempted && s_wifi_connected) {
+        s_mqtt_network_recovery_attempted = true;
+        ESP_LOGW(TAG, "No MQTT publish acknowledgement for 60 seconds; reconnecting Wi-Fi");
+        esp_wifi_disconnect();
+    }
 
     if (s_mqtt_watchdog_test_pending || mqtt_publish_overdue) {
         ESP_LOGE(TAG, "MQTT publish watchdog restarting device");
